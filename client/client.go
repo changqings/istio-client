@@ -1,4 +1,4 @@
-package istioClient
+package client
 
 import (
 	"fmt"
