@@ -65,11 +65,7 @@ func (vs *Vs) GetVs(cs *versioned.Clientset) *v1beta1.VirtualService {
 
 }
 
-func (vs *Vs) UpdateVs(cs *versioned.Clientset) *v1beta1.VirtualService {
-	vsOri := vs.GetVs(cs)
-	if vsOri != nil {
-		log.Panicln("UpdateVs can not get ori vs")
-	}
+func (vs *Vs) AddVsRule(cs *versioned.Clientset, vsOri *v1beta1.VirtualService) *v1beta1.VirtualService {
 	// some operation done there
 
 	// update vs
@@ -81,11 +77,18 @@ func (vs *Vs) UpdateVs(cs *versioned.Clientset) *v1beta1.VirtualService {
 	return v
 }
 
-func (vs *Vs) PatchVs(cs *versioned.Clientset) *v1beta1.VirtualService {
-	vsOri := vs.GetVs(cs)
-	if vsOri != nil {
-		log.Panicln("PatchVs can not get ori vs")
+func (vs *Vs) DelVsRule(cs *versioned.Clientset, vsOri *v1beta1.VirtualService) *v1beta1.VirtualService {
+
+	v, err := cs.NetworkingV1beta1().VirtualServices(vs.Namespace).Update(ctx, vsOri, v1.UpdateOptions{})
+	if err != nil {
+		log.Printf("Del vs rule err: %v", err)
+
 	}
+	return v
+
+}
+
+func (vs *Vs) PatchVs(cs *versioned.Clientset, vsOri *v1beta1.VirtualService) *v1beta1.VirtualService {
 	// some operation done there
 
 	// convert vs to byte
