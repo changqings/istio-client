@@ -15,14 +15,16 @@ import (
 )
 
 type Vs struct {
-	Name               string
-	Namespace          string
-	Version            string
-	AppName            string
-	CanaryWeight       int32
-	CanaryWeightSwitch bool
-	HttpMatch          []*networkingV1beta1.HTTPMatchRequest
-	VirtualService     *v1beta1.VirtualService
+	Name                  string
+	Namespace             string
+	Version               string
+	AppName               string
+	CanaryWeight          int32
+	CanaryWeightSwitch    bool
+	StablHttpMatch        []networkingV1beta1.HTTPMatchRequest
+	StableHttpDestination []networkingV1beta1.HTTPRouteDestination
+	HttpMatch             []*networkingV1beta1.HTTPMatchRequest
+	VirtualService        *v1beta1.VirtualService
 }
 
 var ctx = context.Background()
@@ -64,16 +66,64 @@ func (vs *Vs) GetVsRule(cs *versioned.Clientset, rname string) (int, *networking
 
 }
 
-func (vs *Vs) AddVsRule(cs *versioned.Clientset, vsOri *v1beta1.VirtualService) *v1beta1.VirtualService {
+func (vs *Vs) AddVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error) {
+
+	// get ori vs
+	vs.VirtualService = vs.GetVs(cs)
 	// some operation done there
+	index, stableRoute := vs.getVsStableRoute(cs)
+	if stableRoute == nil || index == -1 {
+		return nil, fmt.Errorf("can't get stable route, please check")
+	}
+
+	defaultHttpMatch := &networkingV1beta1.HTTPMatchRequest{
+		Name: fmt.Sprintf("%s-%s", vs.AppName, tools.ReplaceVersion(vs.Version)),
+		Headers: map[string]*networkingV1beta1.StringMatch{
+			"x-weike-forward": {
+				MatchType: &networkingV1beta1.StringMatch_Exact{
+					Exact: vs.Version,
+				},
+			},
+		},
+	}
+
+	defaultHttpRoute := []*networkingV1beta1.HTTPRouteDestination{
+		{
+			Destination: &networkingV1beta1.Destination{
+				Host:   fmt.Sprintf("%s-canary.%s.svc.cluster.local", vs.AppName, vs.Namespace),
+				Subset: tools.ReplaceVersion(vs.Version),
+			},
+			Weight: 100,
+		},
+		{
+			Destination: &networkingV1beta1.Destination{
+				Host:   fmt.Sprintf("%s.%s.svc.cluster.local", vs.AppName, vs.Namespace),
+				Subset: "stable",
+			},
+			Weight: 0,
+		},
+	}
+
+	stableUri := checkVsMatchUri(stableRoute)
+
+	if stableUri != nil {
+		defaultHttpMatch.Uri = stableUri
+	}
+
+	canaryHr := &networkingV1beta1.HTTPRoute{}
+
+	canaryHr.Match[0] = defaultHttpMatch
+	canaryHr.Route = defaultHttpRoute
+
+	vs.VirtualService.Spec.Http = append(vs.VirtualService.Spec.Http[:index], append([]*networkingV1beta1.HTTPRoute{canaryHr}, vs.VirtualService.Spec.Http[index:]...)...)
 
 	// update vs
-	v, err := cs.NetworkingV1beta1().VirtualServices(vs.Namespace).Update(ctx, vsOri, metav1.UpdateOptions{})
+	v, err := cs.NetworkingV1beta1().VirtualServices(vs.Namespace).Update(ctx, vs.VirtualService, metav1.UpdateOptions{})
 	if err != nil {
 		log.Printf("Get vs err: %v", err)
-		return nil
+		return nil, nil
 	}
-	return v
+	return v, nil
 }
 
 func (vs *Vs) DelVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error) {
@@ -164,7 +214,7 @@ func (vs *Vs) getVsRouteWeight(cs *versioned.Clientset, hDest []*networkingV1bet
 	return -1, -1
 }
 
-func (vs *Vs) addVsStableRoute(cs *versioned.Clientset, hDest []*networkingV1beta1.HTTPRouteDestination) []*networkingV1beta1.HTTPRouteDestination {
+func (vs *Vs) addVsStableDestination(cs *versioned.Clientset, hDest []*networkingV1beta1.HTTPRouteDestination) []*networkingV1beta1.HTTPRouteDestination {
 	hDestStable := &networkingV1beta1.HTTPRouteDestination{
 		Destination: &networkingV1beta1.Destination{
 			Host:   fmt.Sprintf("%s.%s.svc.cluster.local", vs.AppName, vs.Namespace),
@@ -177,4 +227,34 @@ func (vs *Vs) addVsStableRoute(cs *versioned.Clientset, hDest []*networkingV1bet
 
 	hDest = append(hDest, hDestStable)
 	return hDest
+}
+
+func (vs *Vs) getVsStableRoute(cs *versioned.Clientset) (int, *networkingV1beta1.HTTPRoute) {
+	rName := fmt.Sprintf("%s,%s.svc.cluster.local", vs.AppName, vs.Namespace)
+	index, stableRoute := vs.GetVsRule(cs, rName)
+
+	if stableRoute != nil {
+		return index, stableRoute.DeepCopy()
+	}
+
+	return -1, nil
+}
+
+func checkVsMatchUri(hRoute *networkingV1beta1.HTTPRoute) *networkingV1beta1.StringMatch {
+
+	hc := hRoute.DeepCopy()
+	if hc == nil {
+		return nil
+	}
+
+	if len(hc.Match) == 0 {
+		return nil
+	}
+
+	for _, v := range hc.Match {
+		if v.Uri != nil {
+			return v.Uri
+		}
+	}
+	return nil
 }
