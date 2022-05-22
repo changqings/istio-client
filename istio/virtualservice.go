@@ -178,10 +178,11 @@ func (vs *Vs) UpdateCanaryVsHttpRoute(cs *versioned.Clientset, rName string) *v1
 	default:
 		// get stable route and check stable route has uri Match, if ok, add it to canary vsRoute match when canary vsRoute match no uri(if it has headers)
 		_, vsStableRoute := vs.getVsStableRoute(cs)
-		if getVsMatchUri(vsStableRoute) != nil {
+
+		if stableUri := getVsMatchUri(vsStableRoute); stableUri != nil {
 			for _, j := range vs.HttpMatch {
 				if j.Uri == nil {
-					j.Uri = getVsMatchUri(vsStableRoute)
+					j.Uri = stableUri
 				}
 			}
 		}
