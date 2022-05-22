@@ -21,7 +21,7 @@ type Vs struct {
 	AppName               string
 	CanaryWeight          int32
 	CanaryWeightSwitch    bool
-	StablHttpMatch        []networkingV1beta1.HTTPMatchRequest
+	StableHttpMatch       []networkingV1beta1.HTTPMatchRequest
 	StableHttpDestination []networkingV1beta1.HTTPRouteDestination
 	HttpMatch             []*networkingV1beta1.HTTPMatchRequest
 	VirtualService        *v1beta1.VirtualService
@@ -29,19 +29,7 @@ type Vs struct {
 
 var ctx = context.Background()
 
-func (vs *Vs) ListVs(cs *versioned.Clientset) []*v1beta1.VirtualServiceList {
-
-	var vsListSlice []*v1beta1.VirtualServiceList
-	vsList, err := cs.NetworkingV1beta1().VirtualServices(vs.Namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		log.Printf("List vs err: %v", err)
-		return nil
-	}
-	vsListSlice = append(vsListSlice, vsList)
-
-	return vsListSlice
-}
-
+// get the vs.Name pointer
 func (vs *Vs) GetVs(cs *versioned.Clientset) *v1beta1.VirtualService {
 
 	v, err := cs.NetworkingV1beta1().VirtualServices(vs.Namespace).Get(ctx, vs.Name, metav1.GetOptions{})
@@ -53,7 +41,9 @@ func (vs *Vs) GetVs(cs *versioned.Clientset) *v1beta1.VirtualService {
 	return v
 
 }
-func (vs *Vs) GetVsRule(cs *versioned.Clientset, rname string) (int, *networkingV1beta1.HTTPRoute) {
+
+// get vs httpRoute
+func (vs *Vs) GetVsHttpRoute(cs *versioned.Clientset, rname string) (int, *networkingV1beta1.HTTPRoute) {
 	v := vs.GetVs(cs)
 
 	for index, j := range v.Spec.Http {
@@ -66,7 +56,8 @@ func (vs *Vs) GetVsRule(cs *versioned.Clientset, rname string) (int, *networking
 
 }
 
-func (vs *Vs) AddVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error) {
+// first cd add the default canary vs httpRoute
+func (vs *Vs) AddCanaryVsHttpRoute(cs *versioned.Clientset) (*v1beta1.VirtualService, error) {
 
 	// get ori vs
 	vs.VirtualService = vs.GetVs(cs)
@@ -104,7 +95,7 @@ func (vs *Vs) AddVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error
 		},
 	}
 
-	stableUri := checkVsMatchUri(stableRoute)
+	stableUri := getVsMatchUri(stableRoute)
 
 	if stableUri != nil {
 		defaultHttpMatch.Uri = stableUri
@@ -126,7 +117,8 @@ func (vs *Vs) AddVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error
 	return v, nil
 }
 
-func (vs *Vs) DelVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error) {
+// del canary vs httpRoute, and check all canary version delete, and update it into vs.Name
+func (vs *Vs) DelCanaryVsHttpRoute(cs *versioned.Clientset) (*v1beta1.VirtualService, error) {
 
 	vOri := vs.VirtualService
 	if vOri == nil {
@@ -143,6 +135,10 @@ func (vs *Vs) DelVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error
 		}
 	}
 
+	if err := vs.checkVsSubsetExist(vOri); err != nil {
+		return nil, err
+	}
+
 	v, err := cs.NetworkingV1beta1().VirtualServices(vs.Namespace).Update(ctx, vOri, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, err
@@ -152,7 +148,8 @@ func (vs *Vs) DelVsRule(cs *versioned.Clientset) (*v1beta1.VirtualService, error
 
 }
 
-func (vs *Vs) UpdateVsRule(cs *versioned.Clientset, rName string) *v1beta1.VirtualService {
+// update canary vs httpRoute when it had been put or post or put from frontend
+func (vs *Vs) UpdateCanaryVsHttpRoute(cs *versioned.Clientset, rName string) *v1beta1.VirtualService {
 
 	vOri := vs.VirtualService.DeepCopy()
 	if vOri == nil {
@@ -160,23 +157,35 @@ func (vs *Vs) UpdateVsRule(cs *versioned.Clientset, rName string) *v1beta1.Virtu
 	}
 
 	// upate vs.HttpRoute.Name rule
-	index, _ := vs.GetVsRule(cs, rName)
+	index, _ := vs.GetVsHttpRoute(cs, rName)
 
 	vTargetHttp := vOri.Spec.Http[index]
-	vTargetHttp.Match = vs.HttpMatch
 
-	rIndex, rWeight := vs.getVsRouteWeight(cs, vTargetHttp.Route)
+	// if CanaryWeight has changed, then update weight, and remove matches not in stable match
+	switch vs.CanaryWeightSwitch {
+	case true:
+		rIndex, rWeight := vs.getVsRouteWeight(cs, vTargetHttp.Route)
+		if vs.CanaryWeight != rWeight && len(vTargetHttp.Match) == 2 {
+			// mod canary httpRoute []destionationRoute weight
+			vTargetHttp.Route[rIndex].Weight = vs.CanaryWeight
+			vTargetHttp.Route[1-rIndex].Weight = 100 - vs.CanaryWeight
 
-	if len(vTargetHttp.Route) != 1 && rWeight != 0 || len(vTargetHttp.Route) != 1 && rWeight == 100 {
-
-	} else if vs.CanaryWeight != 100 && vs.CanaryWeight != rWeight && len(vTargetHttp.Match) == 2 {
-		if rIndex == 0 {
-			vTargetHttp.Route[0].Weight = vs.CanaryWeight
-			vTargetHttp.Route[1].Weight = 100 - vs.CanaryWeight
+			// use stable httpRoute.Match replace of canary httpRoute.Match
+			vTargetHttp.Match = vs.getVsStableMatch(cs)
 		} else {
-			vTargetHttp.Route[1].Weight = vs.CanaryWeight
-			vTargetHttp.Route[0].Weight = 100 - vs.CanaryWeight
+			log.Printf("The canary weight not changed, do nothing.")
 		}
+	default:
+		// get stable route and check stable route has uri Match, if ok, add it to canary vsRoute match when canary vsRoute match no uri(if it has headers)
+		_, vsStableRoute := vs.getVsStableRoute(cs)
+		if getVsMatchUri(vsStableRoute) != nil {
+			for _, j := range vs.HttpMatch {
+				if j.Uri == nil {
+					j.Uri = getVsMatchUri(vsStableRoute)
+				}
+			}
+		}
+		vTargetHttp.Match = vs.HttpMatch
 	}
 
 	// update vs
@@ -188,7 +197,8 @@ func (vs *Vs) UpdateVsRule(cs *versioned.Clientset, rName string) *v1beta1.Virtu
 	return v
 }
 
-func (vs *Vs) CheckVsSubsetExist(vOri *v1beta1.VirtualService) error {
+// when delete canary rule, check all httpRouteDestinatio have no canary version
+func (vs *Vs) checkVsSubsetExist(vOri *v1beta1.VirtualService) error {
 	// check all canary version not used
 	sub := strings.ReplaceAll(vs.Version, ".", "-")
 	for _, m := range vOri.Spec.Http {
@@ -203,6 +213,7 @@ func (vs *Vs) CheckVsSubsetExist(vOri *v1beta1.VirtualService) error {
 
 }
 
+// return RouteDestion index and weight
 func (vs *Vs) getVsRouteWeight(cs *versioned.Clientset, hDest []*networkingV1beta1.HTTPRouteDestination) (int32, int32) {
 	t := tools.ReplaceVersion(vs.Version)
 
@@ -214,24 +225,16 @@ func (vs *Vs) getVsRouteWeight(cs *versioned.Clientset, hDest []*networkingV1bet
 	return -1, -1
 }
 
-func (vs *Vs) addVsStableDestination(cs *versioned.Clientset, hDest []*networkingV1beta1.HTTPRouteDestination) []*networkingV1beta1.HTTPRouteDestination {
-	hDestStable := &networkingV1beta1.HTTPRouteDestination{
-		Destination: &networkingV1beta1.Destination{
-			Host:   fmt.Sprintf("%s.%s.svc.cluster.local", vs.AppName, vs.Namespace),
-			Subset: "stable",
-		},
-		Weight: 0,
-	}
-
-	hDest[0].Weight = 100
-
-	hDest = append(hDest, hDestStable)
-	return hDest
+// get stable httpRoute.Match, whether it have something or not, if sRoute.Match == nil, return nil
+func (vs *Vs) getVsStableMatch(cs *versioned.Clientset) []*networkingV1beta1.HTTPMatchRequest {
+	_, sRoute := vs.getVsStableRoute(cs)
+	return sRoute.Match
 }
 
+// get stable route pointer and it's index in the vs
 func (vs *Vs) getVsStableRoute(cs *versioned.Clientset) (int, *networkingV1beta1.HTTPRoute) {
 	rName := fmt.Sprintf("%s-stable", vs.AppName)
-	index, stableRoute := vs.GetVsRule(cs, rName)
+	index, stableRoute := vs.GetVsHttpRoute(cs, rName)
 
 	if stableRoute != nil {
 		return index, stableRoute.DeepCopy()
@@ -240,14 +243,11 @@ func (vs *Vs) getVsStableRoute(cs *versioned.Clientset) (int, *networkingV1beta1
 	return -1, nil
 }
 
-func checkVsMatchUri(hRoute *networkingV1beta1.HTTPRoute) *networkingV1beta1.StringMatch {
+// if httpRoute.Match have uri, return this uri match
+func getVsMatchUri(hRoute *networkingV1beta1.HTTPRoute) *networkingV1beta1.StringMatch {
 
 	hc := hRoute.DeepCopy()
-	if hc == nil {
-		return nil
-	}
-
-	if len(hc.Match) == 0 {
+	if hc == nil || len(hc.Match) == 0 {
 		return nil
 	}
 

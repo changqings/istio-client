@@ -49,7 +49,7 @@ func test() {
 	// get
 	// vs.Http.Name = "test"
 
-	// m := vs.GetVsRule(cs)
+	// m := vs.GetVsHttpRoute(cs)
 
 	// mStr, _ := json.Marshal(m)
 	// fmt.Printf("vs http index =%d, and match = %s\n", vs.Http.Index, string(mStr))
@@ -66,7 +66,7 @@ func test() {
 
 	// del
 	// vs.VertualService = vs.GetVs(cs)
-	// vsNew, err := vs.DelVsRule(cs)
+	// vsNew, err := vs.DelCanaryVsHttpRoute(cs)
 
 	// if err == nil {
 	// 	for _, n := range vsNew.Spec.Http {
@@ -105,7 +105,7 @@ func test() {
 	fmt.Printf("%v", vs.HttpMatch)
 
 	vs.CanaryWeight = 82
-	vsTarg := vs.UpdateVsRule(cs, rName)
+	vsTarg := vs.UpdateCanaryVsHttpRoute(cs, rName)
 	if vsTarg == nil {
 		log.Panicln("update vs failed, please check")
 	}
