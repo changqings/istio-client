@@ -230,7 +230,7 @@ func (vs *Vs) addVsStableDestination(cs *versioned.Clientset, hDest []*networkin
 }
 
 func (vs *Vs) getVsStableRoute(cs *versioned.Clientset) (int, *networkingV1beta1.HTTPRoute) {
-	rName := fmt.Sprintf("%s,%s.svc.cluster.local", vs.AppName, vs.Namespace)
+	rName := fmt.Sprintf("%s-stable", vs.AppName)
 	index, stableRoute := vs.GetVsRule(cs, rName)
 
 	if stableRoute != nil {
