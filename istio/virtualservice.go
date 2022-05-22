@@ -148,7 +148,7 @@ func (vs *Vs) DelCanaryVsHttpRoute(cs *versioned.Clientset) (*v1beta1.VirtualSer
 
 }
 
-// update canary vs httpRoute when it had been put or post or put from frontend
+// update canary vs httpRoute when it had been put or post from frontend
 func (vs *Vs) UpdateCanaryVsHttpRoute(cs *versioned.Clientset, rName string) *v1beta1.VirtualService {
 
 	vOri := vs.VirtualService.DeepCopy()
