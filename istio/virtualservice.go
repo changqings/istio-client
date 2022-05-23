@@ -56,7 +56,7 @@ func (vs *Vs) GetVsHttpRoute(cs *versioned.Clientset, rname string) (int, *netwo
 
 }
 
-// first cd add the default canary vs httpRoute
+// first cd add the default canary vs httpRoute, when mutli canary version , sort it by time
 func (vs *Vs) AddCanaryVsHttpRoute(cs *versioned.Clientset) (*v1beta1.VirtualService, error) {
 
 	// get ori vs
@@ -68,9 +68,8 @@ func (vs *Vs) AddCanaryVsHttpRoute(cs *versioned.Clientset) (*v1beta1.VirtualSer
 	}
 
 	defaultHttpMatch := &networkingV1beta1.HTTPMatchRequest{
-		Name: fmt.Sprintf("%s-%s", vs.AppName, tools.ReplaceVersion(vs.Version)),
 		Headers: map[string]*networkingV1beta1.StringMatch{
-			"x-weike-forward": {
+			"x-weike-fe-forward": {
 				MatchType: &networkingV1beta1.StringMatch_Exact{
 					Exact: vs.Version,
 				},
@@ -101,10 +100,13 @@ func (vs *Vs) AddCanaryVsHttpRoute(cs *versioned.Clientset) (*v1beta1.VirtualSer
 		defaultHttpMatch.Uri = stableUri
 	}
 
-	canaryHr := &networkingV1beta1.HTTPRoute{}
-
-	canaryHr.Match[0] = defaultHttpMatch
-	canaryHr.Route = defaultHttpRoute
+	canaryHr := &networkingV1beta1.HTTPRoute{
+		Name: fmt.Sprintf("%s-%s", vs.AppName, tools.ReplaceVersion(vs.Version)),
+		Match: []*networkingV1beta1.HTTPMatchRequest{
+			defaultHttpMatch,
+		},
+		Route: defaultHttpRoute,
+	}
 
 	vs.VirtualService.Spec.Http = append(vs.VirtualService.Spec.Http[:index], append([]*networkingV1beta1.HTTPRoute{canaryHr}, vs.VirtualService.Spec.Http[index:]...)...)
 
@@ -165,7 +167,7 @@ func (vs *Vs) UpdateCanaryVsHttpRoute(cs *versioned.Clientset, rName string) *v1
 	switch vs.CanaryWeightSwitch {
 	case true:
 		rIndex, rWeight := vs.getVsRouteWeight(cs, vTargetHttp.Route)
-		if vs.CanaryWeight != rWeight && len(vTargetHttp.Match) == 2 {
+		if vs.CanaryWeight != rWeight && len(vTargetHttp.Route) == 2 {
 			// mod canary httpRoute []destionationRoute weight
 			vTargetHttp.Route[rIndex].Weight = vs.CanaryWeight
 			vTargetHttp.Route[1-rIndex].Weight = 100 - vs.CanaryWeight
@@ -187,6 +189,15 @@ func (vs *Vs) UpdateCanaryVsHttpRoute(cs *versioned.Clientset, rName string) *v1
 			}
 		}
 		vTargetHttp.Match = vs.HttpMatch
+
+		// reset canary weight back to default 100, and stable weight to 0
+		rIndex, rWeight := vs.getVsRouteWeight(cs, vTargetHttp.Route)
+		if rWeight != 100 && len(vTargetHttp.Route) == 2 {
+			// modify canary httpRoute []destionationRoute weight
+			vTargetHttp.Route[rIndex].Weight = 100
+			vTargetHttp.Route[1-rIndex].Weight = 0
+		}
+
 	}
 
 	// update vs
@@ -204,9 +215,9 @@ func (vs *Vs) checkVsSubsetExist(vOri *v1beta1.VirtualService) error {
 	sub := strings.ReplaceAll(vs.Version, ".", "-")
 	for _, m := range vOri.Spec.Http {
 		for _, n := range m.Route {
-			if n.Destination.Subset == sub {
+			if n.Destination.Subset == sub && n.Destination.Host == fmt.Sprintf("%s-canary.%s.svc.cluster.local", vs.Name, vs.Namespace) {
 				log.Printf("Not all subset = %s delete, please check", sub)
-				return errors.New("check all subset delete error")
+				return fmt.Errorf("check all subset delete error")
 			}
 		}
 	}
