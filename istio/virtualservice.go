@@ -100,13 +100,11 @@ func (vs *Vs) AddCanaryVsHttpRoute(cs *versioned.Clientset) (*v1beta1.VirtualSer
 		defaultHttpMatch.Uri = stableUri
 	}
 
-	canaryHr := &networkingV1beta1.HTTPRoute{
-		Name: fmt.Sprintf("%s-%s", vs.AppName, tools.ReplaceVersion(vs.Version)),
-		Match: []*networkingV1beta1.HTTPMatchRequest{
-			defaultHttpMatch,
-		},
-		Route: defaultHttpRoute,
-	}
+	canaryHr := stableRoute.DeepCopy()
+
+	canaryHr.Name = fmt.Sprintf("%s-%s", vs.AppName, tools.ReplaceVersion(vs.Version))
+	canaryHr.Match = []*networkingV1beta1.HTTPMatchRequest{defaultHttpMatch}
+	canaryHr.Route = defaultHttpRoute
 
 	vs.VirtualService.Spec.Http = append(vs.VirtualService.Spec.Http[:index], append([]*networkingV1beta1.HTTPRoute{canaryHr}, vs.VirtualService.Spec.Http[index:]...)...)
 
