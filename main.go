@@ -3,16 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"istio-client/client"
 	"istio-client/istio"
 	tools "istio-client/utils"
 	"log"
 	"os"
 
+	k8scrdClient "github.com/changqings/k8scrd/client"
 	"github.com/gofiber/fiber/v2"
 )
 
-var cs = client.GetIstioClient()
+var istioClient = k8scrdClient.GetIstioClient()
 
 func main() {
 
@@ -56,7 +56,7 @@ func test() {
 
 	vs.Version = "canary-v0.0.1"
 	rName := vs.AppName + "-" + tools.ReplaceVersion(vs.Version)
-	vs.VirtualService = vs.GetVs(cs)
+	vs.VirtualService = vs.GetVs(istioClient)
 
 	// get match
 	// j := vs.VirtualService.Spec.Http[0].Match
@@ -105,7 +105,7 @@ func test() {
 	fmt.Printf("%v", vs.HttpMatch)
 
 	vs.CanaryWeight = 82
-	vsTarg := vs.UpdateCanaryVsHttpRoute(cs, rName)
+	vsTarg := vs.UpdateCanaryVsHttpRoute(istioClient, rName)
 	if vsTarg == nil {
 		log.Panicln("update vs failed, please check")
 	}
